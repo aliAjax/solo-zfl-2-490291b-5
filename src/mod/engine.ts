@@ -7,7 +7,7 @@ import type {
   ModWeights,
   PlanItemScore,
   PlanViolation,
-  RelaxSuggestion,
+  RelaxGroup,
 } from '@/types';
 import { MOD_CATEGORIES } from '@/types';
 
@@ -356,8 +356,12 @@ export function enumerateBench({ candidates, constraints, weights, locks }: Enum
 export interface Diagnosis {
   /** 无解原因概览（按违规类型聚合） */
   reasons: PlanViolation[];
-  /** 最少放宽建议，按「放宽数量升序、预算优先、重量其次、标签最后」稳定排列 */
-  suggestions: RelaxSuggestion[];
+  /**
+   * 最少放宽建议组：每一组都必须**整组一起放宽**才会出现可行组合。
+   * 单项可解时每组只有 1 个约束；复合无解时每组含 2 个或更多约束。
+   * 按组内最小优先级稳定排列。
+   */
+  groups: RelaxGroup[];
   /** 违规最少的一个不可行组合（用于展示差距） */
   nearestInfeasible: ModPlan | null;
   totalEnumerated: number;
@@ -448,19 +452,24 @@ export function diagnoseBench({ candidates, constraints, weights, locks }: Enume
           a.comboKey.localeCompare(b.comboKey),
       )[0] ?? null;
 
-  // 枚举约束子集：先按放弃数量升序，找到第一层可行子集即停止
-  const suggestions: RelaxSuggestion[] = [];
-  const seenSuggestionKeys = new Set<string>();
+  // 枚举约束子集，按放弃数量升序，找到第一个存在可行解的层级。
+  // 该层上每个可行子集都是一个「必须整组一起放宽」的建议；
+  // 任何更小的子集都已确认无解，因此组内每个约束都无法单独解决问题。
+  const groups: RelaxGroup[] = [];
+  const seenGroupKeys = new Set<string>();
   const subsets = enumerateSubsets(allKeys);
-  let droppedSize = -1;
+  let minDroppedSize = -1;
+
+  const dropKey = (d: { type: 'budget' | 'weight' | 'tag'; tag?: string }) =>
+    d.type === 'tag' ? `tag:${d.tag}` : d.type;
 
   outer: for (const dropped of subsets) {
-    if (dropped.length === 0) continue; // 空集=原约束，已知无解
-    if (droppedSize >= 0 && dropped.length > droppedSize) break; // 已找到更优层
+    if (dropped.length === 0) continue; // 空集 = 原约束，已知无解
+    if (minDroppedSize >= 0 && dropped.length > minDroppedSize) break; // 已在更小层级找到可行组
 
-    const droppedSet = new Set(dropped.map((k) =>
-      k.kind === 'tag' ? `tag:${k.tag}` : k.kind,
-    ));
+    const droppedSet = new Set(
+      dropped.map((k) => (k.kind === 'tag' ? `tag:${k.tag}` : k.kind)),
+    );
     const filters: ActiveFilters = {
       allowBudget: !droppedSet.has('budget') && constraints.budget !== null,
       allowWeight: !droppedSet.has('weight') && constraints.maxWeight !== null,
@@ -478,36 +487,56 @@ export function diagnoseBench({ candidates, constraints, weights, locks }: Enume
       true,
     );
     if (truncated) break;
+    if (plans.length === 0) continue;
 
-    if (plans.length > 0) {
-      droppedSize = dropped.length;
-      const ordered = dropped.slice().sort((a, b) => a.priority - b.priority);
-      // 见证方案取该放宽下排名第一的方案
-      const witness = plans.slice().sort(comparePlans)[0];
-      for (const key of ordered) {
-        const dedupeKey = key.kind === 'tag' ? `tag:${key.tag}` : key.kind;
-        if (seenSuggestionKeys.has(dedupeKey)) continue;
-        seenSuggestionKeys.add(dedupeKey);
-        suggestions.push({
-          drop: key.kind,
-          tag: key.tag,
-          witness,
-          priority: key.priority,
-        });
-      }
-      if (suggestions.length >= 6) break outer;
-    }
+    // 该层级出现第一个可行子集
+    if (minDroppedSize < 0) minDroppedSize = dropped.length;
+
+    const orderedDrops = dropped
+      .slice()
+      .sort((a, b) => a.priority - b.priority)
+      .map((k) => ({ type: k.kind, tag: k.tag } as RelaxGroup['drops'][number]));
+    const groupKey = orderedDrops.map(dropKey).join('|');
+    if (seenGroupKeys.has(groupKey)) continue;
+    seenGroupKeys.add(groupKey);
+
+    // 见证方案取该放宽下排名第一的方案（必为真实可行组合）
+    const witness = plans.slice().sort(comparePlans)[0];
+    groups.push({
+      drops: orderedDrops,
+      witness,
+      priority: Math.min(...dropped.map((d) => d.priority)),
+    });
+    if (groups.length >= 8) break outer;
   }
 
-  suggestions.sort((a, b) => a.priority - b.priority);
+  // 组间稳定排序：放宽数量升序 → 组内最小优先级升序 → 组键字典序
+  groups.sort(
+    (a, b) =>
+      a.drops.length - b.drops.length ||
+      a.priority - b.priority ||
+      a.drops.map(dropKey).join('|').localeCompare(b.drops.map(dropKey).join('|')),
+  );
 
   return {
     reasons,
-    suggestions,
+    groups,
     nearestInfeasible,
     totalEnumerated: all.truncated ? -1 : all.count,
     truncated: all.truncated,
   };
+}
+
+/** 单个约束放宽动作文案 */
+export function relaxDropLabel(d: { type: 'budget' | 'weight' | 'tag'; tag?: string }): string {
+  if (d.type === 'budget') return '取消预算上限';
+  if (d.type === 'weight') return '取消重量上限';
+  return `取消必含标签 #${d.tag ?? ''}`;
+}
+
+/** 一组必须一起放宽的约束的聚合文案（顿号连接） */
+export function relaxGroupLabel(group: RelaxGroup): string {
+  return group.drops.map(relaxDropLabel).join('、');
 }
 
 /** 枚举全部子集，按元素个数升序、同层按优先级位掩码稳定排列 */

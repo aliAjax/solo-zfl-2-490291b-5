@@ -1,17 +1,12 @@
-import { ShieldX, Wand2, Target, AlertTriangle } from 'lucide-react';
+import { ShieldX, Wand2, Target, AlertTriangle, Plus } from 'lucide-react';
 import type { Diagnosis } from '@/mod/engine';
-import type { RelaxSuggestion } from '@/types';
+import { relaxDropLabel } from '@/mod/engine';
+import type { RelaxGroup } from '@/types';
 import { MOD_CATEGORIES, MOD_CATEGORY_LABELS } from '@/types';
 
 interface Props {
   diagnosis: Diagnosis;
-  onApply: (suggestion: RelaxSuggestion) => void;
-}
-
-function suggestLabel(s: RelaxSuggestion): string {
-  if (s.drop === 'budget') return '取消预算上限';
-  if (s.drop === 'weight') return '取消重量上限';
-  return `取消必含标签 #${s.tag}`;
+  onApply: (group: RelaxGroup) => void;
 }
 
 export default function NoSolutionPanel({ diagnosis, onApply }: Props) {
@@ -49,42 +44,56 @@ export default function NoSolutionPanel({ diagnosis, onApply }: Props) {
         </div>
       )}
 
-      {diagnosis.suggestions.length > 0 ? (
+      {diagnosis.groups.length > 0 ? (
         <div className="mb-4">
           <div className="flex items-center gap-1.5 mb-2 text-[11px] font-mono uppercase tracking-wider text-moss-400">
             <Wand2 className="h-3.5 w-3.5" />
-            最少放宽建议（放宽任意一项即可出现可行组合）
+            最少放宽建议（每组必须整组一起放宽才会出现可行组合）
           </div>
           <div className="space-y-2">
-            {diagnosis.suggestions.map((s, i) => (
-              <button
-                key={`${s.drop}-${s.tag ?? ''}`}
-                onClick={() => onApply(s)}
-                data-testid={`relax-${i}`}
-                className="w-full text-left rounded-lg border border-moss-500/25 bg-moss-500/5 hover:bg-moss-500/10 hover:border-moss-500/50 transition-all p-3 group"
-              >
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <span className="text-sm font-mono font-semibold text-moss-400">
-                    {suggestLabel(s)}
-                  </span>
-                  <span className="text-[10px] font-mono text-ink-500 group-hover:text-moss-400 transition-colors">
-                    点击应用 →
-                  </span>
-                </div>
-                <div className="text-[11px] text-ink-400 leading-relaxed">
-                  放宽后最优组合：
-                  {MOD_CATEGORIES.map((cat) => (
-                    <span key={cat}>
-                      <span className="text-ink-500"> {MOD_CATEGORY_LABELS[cat]}·</span>
-                      {s.witness.items[cat].name}
+            {diagnosis.groups.map((g, i) => {
+              const multi = g.drops.length > 1;
+              return (
+                <button
+                  key={g.drops.map((d) => (d.type === 'tag' ? `tag:${d.tag}` : d.type)).join('|')}
+                  onClick={() => onApply(g)}
+                  data-testid={`relax-${i}`}
+                  data-relax-size={g.drops.length}
+                  className="w-full text-left rounded-lg border border-moss-500/25 bg-moss-500/5 hover:bg-moss-500/10 hover:border-moss-500/50 transition-all p-3 group"
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="inline-flex flex-wrap items-center gap-1 text-sm font-mono font-semibold text-moss-400">
+                      {g.drops.map((d, di) => (
+                        <span key={`${d.type}-${d.tag ?? ''}`} className="inline-flex items-center gap-1">
+                          {di > 0 && <Plus className="h-3 w-3 text-ink-500" />}
+                          {relaxDropLabel(d)}
+                        </span>
+                      ))}
                     </span>
-                  ))}
-                </div>
-                <div className="text-[11px] font-mono text-ink-500 mt-1">
-                  总分 {s.witness.totalScore.toFixed(1)} · {s.witness.totalPrice} 元 · {s.witness.totalWeight}g
-                </div>
-              </button>
-            ))}
+                    <span className="text-[10px] font-mono text-ink-500 group-hover:text-moss-400 transition-colors whitespace-nowrap">
+                      {multi ? `一起放宽（${g.drops.length} 项）→` : '点击应用 →'}
+                    </span>
+                  </div>
+                  {multi && (
+                    <p className="text-[10px] font-mono text-brass-200/80 mb-1">
+                      单项放宽仍无解，必须同时放宽以上 {g.drops.length} 项
+                    </p>
+                  )}
+                  <div className="text-[11px] text-ink-400 leading-relaxed">
+                    放宽后最优组合：
+                    {MOD_CATEGORIES.map((cat) => (
+                      <span key={cat}>
+                        <span className="text-ink-500"> {MOD_CATEGORY_LABELS[cat]}·</span>
+                        {g.witness.items[cat].name}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="text-[11px] font-mono text-ink-500 mt-1">
+                    总分 {g.witness.totalScore.toFixed(1)} · {g.witness.totalPrice} 元 · {g.witness.totalWeight}g
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       ) : (

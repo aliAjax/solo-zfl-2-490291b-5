@@ -1,4 +1,5 @@
 import { enumerateBench, diagnoseBench } from '../src/mod/engine';
+import { buildDecisionReport } from '../src/mod/report';
 import { modSampleData } from '../src/data/modSampleData';
 
 let failures = 0;
@@ -41,16 +42,81 @@ assert(r3.plans.length === 1, `budget==price boundary feasible, got ${r3.plans.l
 const r3b = enumerateBench({ candidates: modSampleData, constraints: { budget: 349.99, maxWeight: null, requiredTags: [] }, weights, locks: cheapLocks });
 assert(r3b.plans.length === 0, `budget one cent below => infeasible, got ${r3b.plans.length}`);
 
-// 4. 无解：预算 100（最便宜组合 350）
+// 4. 无解：预算 100（最便宜组合 350）—— 单项放宽即可解决
 const d0 = diagnoseBench({ candidates: modSampleData, constraints: { budget: 100, maxWeight: null, requiredTags: [] }, weights, locks: {} });
-assert(d0.suggestions.length > 0, 'no-solution gives relax suggestions');
-assert(d0.suggestions.some(s => s.drop === 'budget'), 'suggests dropping budget');
-assert(d0.suggestions[0].witness.violations.length === 0, 'witness is actually feasible');
+assert(d0.groups.length > 0, 'no-solution gives relax groups');
+assert(d0.groups.some(g => g.drops.length === 1 && g.drops[0].type === 'budget'), 'single group: drop budget');
+assert(d0.groups.every(g => g.witness.violations.length === 0), 'every witness is actually feasible');
+assert(d0.groups[0].drops.length === 1, 'minimum relax size for budget-only is 1');
 
-// 5. 标签无解：要求静音（plate 只有 pc 带静音；switch silent-red；keycap oem-silent；foam ixpe 带静音）
-// 静音组合存在；要求不可能的标签：构造 requiredTags=['焊接'] —— 没有任何 switch 带焊接 => 无解
+// 5. 标签无解：要求没有候选能四类同时满足的标签 —— 单项放宽
 const d1 = diagnoseBench({ candidates: modSampleData, constraints: { budget: null, maxWeight: null, requiredTags: ['焊接'] }, weights, locks: {} });
-assert(d1.suggestions.some(s => s.drop === 'tag' && s.tag === '焊接'), 'suggests dropping impossible tag');
+assert(d1.groups.some(g => g.drops.length === 1 && g.drops[0].type === 'tag' && g.drops[0].tag === '焊接'), 'single group: drop impossible tag');
+
+// 5b. 复合无解：单组合，预算与重量同时超限，单项放宽均无解 -> 必须两项一起放宽
+const mk = (category, id, price, weight, tags = []) => ({
+  id, category, name: id, price, feel: 5, sound: 5, weight, tags, isCurrent: false,
+});
+// 合计价格 500、合计重量 1000（轴100/200 + 帽100/200 + 板150/300 + 棉150/300）
+const oneCombo = [
+  mk('switch', 's1', 100, 200),
+  mk('keycap', 'k1', 100, 200),
+  mk('plate', 'p1', 150, 300),
+  mk('foam', 'f1', 150, 300),
+];
+const d2 = diagnoseBench({ candidates: oneCombo, constraints: { budget: 400, maxWeight: 900, requiredTags: [] }, weights, locks: {} });
+assert(d2.groups.length === 1, `two-relax: exactly 1 group, got ${d2.groups.length}`);
+assert(d2.groups[0].drops.length === 2, `two-relax: group size 2, got ${d2.groups[0].drops.length}`);
+assert(d2.groups[0].drops.some(d => d.type === 'budget') && d2.groups[0].drops.some(d => d.type === 'weight'),
+  'two-relax: group contains budget + weight');
+assert(d2.groups[0].witness.violations.length === 0, 'two-relax: witness feasible');
+assert(d2.groups[0].witness.totalPrice === 500 && d2.groups[0].witness.totalWeight === 1000, 'two-relax: witness is the only combo');
+// 绝不列出单独可用的单项建议
+assert(!d2.groups.some(g => g.drops.length === 1), 'two-relax: no single-item fake suggestion');
+
+// 5c. 三项同放宽：预算、重量、标签同时超限，任何 1~2 项放宽都无解
+const d3 = diagnoseBench({ candidates: oneCombo, constraints: { budget: 400, maxWeight: 900, requiredTags: ['X'] }, weights, locks: {} });
+assert(d3.groups.length === 1, `three-relax: 1 group, got ${d3.groups.length}`);
+assert(d3.groups[0].drops.length === 3, `three-relax: group size 3, got ${d3.groups[0].drops.length}`);
+assert(d3.groups[0].drops.some(d => d.type === 'budget'), 'three-relax: contains budget');
+assert(d3.groups[0].drops.some(d => d.type === 'weight'), 'three-relax: contains weight');
+assert(d3.groups[0].drops.some(d => d.type === 'tag' && d.tag === 'X'), 'three-relax: contains tag X');
+assert(d3.groups[0].witness.violations.length === 0, 'three-relax: witness feasible');
+assert(!d3.groups.some(g => g.drops.length < 3), 'three-relax: no smaller fake groups');
+
+// 5c-2. 复合无解报告：两项组与三项组都渲染为「必须同时放宽」，且无单项假建议
+const reportTwo = buildDecisionReport({
+  candidates: oneCombo,
+  constraints: { budget: 400, maxWeight: 900, requiredTags: [] },
+  weights, plans: [], totalEnumerated: 1, diagnosis: d2,
+});
+assert(reportTwo.includes('取消预算上限 + 取消重量上限'), 'report: two-relax joined label');
+assert(reportTwo.includes('（必须同时放宽）'), 'report: marks togetherness');
+const reportThree = buildDecisionReport({
+  candidates: oneCombo,
+  constraints: { budget: 400, maxWeight: 900, requiredTags: ['X'] },
+  weights, plans: [], totalEnumerated: 1, diagnosis: d3,
+});
+assert(reportThree.includes('取消预算上限 + 取消重量上限 + 取消必含标签 #X'), 'report: three-relax joined label');
+
+// 5d. 同层存在两个不同的两项组：（标签+重量）或（标签+预算）各解锁一个组合
+// 非填充合计：价格 350、重量 700
+const twoCombo = [
+  mk('switch', 's1', 100, 200),
+  mk('keycap', 'k1', 100, 200),
+  mk('plate', 'p1', 150, 300),
+  mk('foam', 'fCheapHeavy', 150, 800), // A: 总价 500 / 总重 1500（超重量，不超预算）
+  mk('foam', 'fPriceyLight', 500, 50), // B: 总价 850 / 总重 750（超预算，不超重量）
+];
+const d4 = diagnoseBench({ candidates: twoCombo, constraints: { budget: 600, maxWeight: 1000, requiredTags: ['X'] }, weights, locks: {} });
+assert(d4.groups.length === 2, `multi-group: 2 groups at min layer, got ${d4.groups.length}`);
+assert(d4.groups.every(g => g.drops.length === 2), 'multi-group: both groups are size 2');
+assert(d4.groups.every(g => g.drops.some(d => d.type === 'tag' && d.tag === 'X')), 'multi-group: both include tag X');
+assert(d4.groups.every(g => g.witness.violations.length === 0), 'multi-group: both witnesses feasible');
+const wA = d4.groups.find(g => g.drops.some(d => d.type === 'weight'));
+const wB = d4.groups.find(g => g.drops.some(d => d.type === 'budget'));
+assert(wA && wA.witness.totalWeight === 1500, 'multi-group: dropping tag+weight unlocks heavy-cheap combo');
+assert(wB && wB.witness.totalPrice === 850, 'multi-group: dropping tag+budget unlocks light-pricey combo');
 
 // 6. 重量边界
 // 锁定 heaviest: brass plate 700 + sa keycap 480 + box navy 300 + silicone 180 = 1660

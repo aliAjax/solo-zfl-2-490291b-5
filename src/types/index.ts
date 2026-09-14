@@ -115,14 +115,23 @@ export interface PlanViolation {
   message: string;
 }
 
-export interface RelaxSuggestion {
+export interface RelaxDrop {
   /** 需要放弃的约束类型 */
-  drop: 'budget' | 'weight' | 'tag';
+  type: 'budget' | 'weight' | 'tag';
   /** 放弃单个标签约束时，该标签名 */
   tag?: string;
-  /** 放宽后可行的见证组合（完整方案） */
+}
+
+export interface RelaxGroup {
+  /**
+   * 必须**一起**放宽的约束集合。
+   * - 单项可解时 drops 长度为 1（保持原有行为）；
+   * - 复合无解时 drops 长度 ≥ 2，点击后一次应用整组。
+   */
+  drops: RelaxDrop[];
+  /** 放宽后可行的见证组合（完整方案，真实可核） */
   witness: ModPlan;
-  /** 放弃的约束在所有约束中的固定优先级（小=优先放宽） */
+  /** 组内最小优先级（用于组间稳定排序：预算 0 < 重量 1 < 标签 2+） */
   priority: number;
 }
 

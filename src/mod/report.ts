@@ -126,17 +126,16 @@ export function buildDecisionReport(input: ReportInput): string {
       diagnosis.reasons.forEach((r) => lines.push(`- ${r.message}`));
       lines.push('');
     }
-    if (diagnosis.suggestions.length > 0) {
+    if (diagnosis.groups.length > 0) {
       lines.push('### 最少放宽建议');
       lines.push('');
-      const labelFor = (s: (typeof diagnosis.suggestions)[number]) => {
-        if (s.drop === 'budget') return '取消预算上限';
-        if (s.drop === 'weight') return '取消重量上限';
-        return `取消必含标签 #${s.tag}`;
-      };
-      diagnosis.suggestions.forEach((s, i) => {
+      diagnosis.groups.forEach((g, i) => {
+        const label = g.drops
+          .map((d) => (d.type === 'budget' ? '取消预算上限' : d.type === 'weight' ? '取消重量上限' : `取消必含标签 #${d.tag ?? ''}`))
+          .join(' + ');
+        const together = g.drops.length > 1 ? '（必须同时放宽）' : '';
         lines.push(
-          `${i + 1}. **${labelFor(s)}** —— 放宽后立即有解，例如：${planComboNames(s.witness, lookup).join(' + ')}（总分 ${s.witness.totalScore.toFixed(2)}，${fmtNum(s.witness.totalPrice)} 元 / ${fmtNum(s.witness.totalWeight)}g）`,
+          `${i + 1}. **${label}**${together} —— 放宽后立即有解，例如：${planComboNames(g.witness, lookup).join(' + ')}（总分 ${g.witness.totalScore.toFixed(2)}，${fmtNum(g.witness.totalPrice)} 元 / ${fmtNum(g.witness.totalWeight)}g）`,
         );
       });
       lines.push('');

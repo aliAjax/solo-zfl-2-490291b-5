@@ -186,8 +186,9 @@ test.describe('改装方案决策台', () => {
     await expect(noSolution).toContainText('无可行方案');
     await expect(noSolution).toContainText('超预算');
 
-    // 最少放宽建议：取消预算上限
+    // 最少放宽建议：单项即可解决 -> 一组一项
     const relaxBtn = page.getByTestId('relax-0');
+    await expect(relaxBtn).toHaveAttribute('data-relax-size', '1');
     await expect(relaxBtn).toContainText('取消预算上限');
     await relaxBtn.click();
 
@@ -233,13 +234,122 @@ test.describe('改装方案决策台', () => {
         weights: s.weights,
         locks: s.locks,
       });
-      const sug = d.suggestions.find((x) => x.drop === 'tag' && x.tag === '热插拔');
-      return Boolean(sug && sug.witness.violations.length === 0);
+      const group = d.groups.find(
+        (g) => g.drops.length === 1 && g.drops[0].type === 'tag' && g.drops[0].tag === '热插拔',
+      );
+      return Boolean(group && group.witness.violations.length === 0);
     });
     expect(witnessOk).toBe(true);
 
     await relax.click();
     await expect(page.getByTestId('plan-card').first()).toBeVisible();
+  });
+
+  test('无解（复合两项）：预算与重量必须一起放宽时，只给出一组两项建议，整组一次应用后出现方案', async ({ page }) => {
+    await gotoBench(page);
+    await expandCandidates(page);
+
+    // 锁定唯一组合：总价 350 元 / 总重 760g
+    await lockCandidate(page, 'sw-gateron-yellow');
+    await lockCandidate(page, 'kc-budget-abs');
+    await lockCandidate(page, 'pl-pc');
+    await lockCandidate(page, 'fm-none');
+    await expect(page.getByTestId('plan-card')).toHaveCount(1);
+
+    // 同时低于价格和重量 -> 两项同时超限，单项放宽都无解
+    await page.getByTestId('constraint-budget').fill('340');
+    await page.getByTestId('constraint-weight').fill('750');
+
+    await expect(page.getByTestId('no-solution')).toBeVisible();
+    await expect(page.getByTestId('plan-card')).toHaveCount(0);
+
+    // 只有一组、组内含两项，绝不出现单项假建议
+    const relaxButtons = page.locator('[data-testid^="relax-"]');
+    await expect(relaxButtons).toHaveCount(1);
+    const group = relaxButtons.first();
+    await expect(group).toHaveAttribute('data-relax-size', '2');
+    await expect(group).toContainText('取消预算上限');
+    await expect(group).toContainText('取消重量上限');
+    await expect(group).toContainText('必须同时放宽');
+
+    // 引擎独立校验：最小放宽数量就是 2，见证方案真实可行
+    const diag = await page.evaluate(async () => {
+      const { diagnoseBench } = await import('/src/mod/engine.ts');
+      const { useModStore } = await import('/src/store/useModStore.ts');
+      const s = useModStore.getState();
+      const d = diagnoseBench({
+        candidates: s.candidates,
+        constraints: s.constraints,
+        weights: s.weights,
+        locks: s.locks,
+      });
+      return {
+        sizes: d.groups.map((g) => g.drops.length),
+        witnessesFeasible: d.groups.every((g) => g.witness.violations.length === 0),
+      };
+    });
+    expect(diag.sizes).toEqual([2]);
+    expect(diag.witnessesFeasible).toBe(true);
+
+    // 点击一次，整组一起应用，立即出现可行方案，且两个数值约束都被清除
+    await group.click();
+    await expect(page.getByTestId('plan-card')).toHaveCount(1);
+    await expect(page.getByTestId('constraint-budget')).toHaveValue('');
+    await expect(page.getByTestId('constraint-weight')).toHaveValue('');
+  });
+
+  test('无解（复合三项）：预算+重量+标签必须同时放宽时，给出一组三项建议，整组应用后才有解', async ({ page }) => {
+    await gotoBench(page);
+    await expandCandidates(page);
+
+    // 锁定唯一组合（不具备静音标签）
+    await lockCandidate(page, 'sw-gateron-yellow');
+    await lockCandidate(page, 'kc-budget-abs');
+    await lockCandidate(page, 'pl-pc');
+    await lockCandidate(page, 'fm-none');
+
+    // 数值双超限 + 锁定组合不具备的标签
+    await page.getByTestId('constraint-budget').fill('340');
+    await page.getByTestId('constraint-weight').fill('750');
+    await page.locator('[data-testid="tag-picker"] button', { hasText: '#静音' }).click();
+
+    await expect(page.getByTestId('no-solution')).toBeVisible();
+
+    const relaxButtons = page.locator('[data-testid^="relax-"]');
+    await expect(relaxButtons).toHaveCount(1);
+    const group = relaxButtons.first();
+    await expect(group).toHaveAttribute('data-relax-size', '3');
+    await expect(group).toContainText('取消预算上限');
+    await expect(group).toContainText('取消重量上限');
+    await expect(group).toContainText('#静音');
+
+    // 引擎独立校验：任何 1~2 项放宽都无解，最小组大小为 3
+    const diag = await page.evaluate(async () => {
+      const { diagnoseBench } = await import('/src/mod/engine.ts');
+      const { useModStore } = await import('/src/store/useModStore.ts');
+      const s = useModStore.getState();
+      const d = diagnoseBench({
+        candidates: s.candidates,
+        constraints: s.constraints,
+        weights: s.weights,
+        locks: s.locks,
+      });
+      return {
+        sizes: d.groups.map((g) => g.drops.length),
+        witnessesFeasible: d.groups.every((g) => g.witness.violations.length === 0),
+      };
+    });
+    expect(diag.sizes).toEqual([3]);
+    expect(diag.witnessesFeasible).toBe(true);
+
+    // 一次点击整组应用：预算、重量、标签全部解除，方案出现
+    await group.click();
+    await expect(page.getByTestId('plan-card')).toHaveCount(1);
+    await expect(page.getByTestId('constraint-budget')).toHaveValue('');
+    await expect(page.getByTestId('constraint-weight')).toHaveValue('');
+    await expect(
+      page.locator('[data-testid="tag-picker"] button', { hasText: '#静音' }),
+    ).not.toHaveClass(/chip-active/);
   });
 
   test('边界值：预算恰好等于总价可行、低一分钱无解；重量上限同样在临界点判定', async ({ page }) => {

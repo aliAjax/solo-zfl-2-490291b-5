@@ -3,7 +3,7 @@ import { FlaskConical, FileDown, Bookmark, Trash2, Wrench, Boxes } from 'lucide-
 import { useModStore } from '@/store/useModStore';
 import { enumerateBench, diagnoseBench } from '@/mod/engine';
 import { buildDecisionReport, downloadMarkdown, generateReportFilename } from '@/mod/report';
-import type { ModPlan, RelaxSuggestion } from '@/types';
+import type { ModConstraints, ModPlan, RelaxGroup } from '@/types';
 import ControlsPanel from './ControlsPanel';
 import CandidatePanel from './CandidatePanel';
 import PlanCard from './PlanCard';
@@ -53,14 +53,21 @@ export default function BenchView() {
     });
   };
 
-  const applyRelax = (s: RelaxSuggestion) => {
-    if (s.drop === 'budget') setConstraints({ budget: null });
-    else if (s.drop === 'weight') setConstraints({ maxWeight: null });
-    else if (s.drop === 'tag' && s.tag) {
-      setConstraints({
-        requiredTags: constraints.requiredTags.filter((t) => t !== s.tag),
-      });
+  /** 一次应用整组必须一起放宽的约束（单项组即原有单项放宽行为） */
+  const applyRelaxGroup = (group: RelaxGroup) => {
+    const patch: Partial<ModConstraints> = {};
+    let tags = [...constraints.requiredTags];
+    let touchesTag = false;
+    for (const d of group.drops) {
+      if (d.type === 'budget') patch.budget = null;
+      else if (d.type === 'weight') patch.maxWeight = null;
+      else if (d.type === 'tag' && d.tag) {
+        touchesTag = true;
+        tags = tags.filter((t) => t !== d.tag);
+      }
     }
+    if (touchesTag) patch.requiredTags = tags;
+    setConstraints(patch);
   };
 
   const loadSavedCombo = (comboKey: string) => {
@@ -123,7 +130,7 @@ export default function BenchView() {
           </div>
         </div>
       ) : diagnosis ? (
-        <NoSolutionPanel diagnosis={diagnosis} onApply={applyRelax} />
+        <NoSolutionPanel diagnosis={diagnosis} onApply={applyRelaxGroup} />
       ) : (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 px-1" data-testid="bench-summary">
