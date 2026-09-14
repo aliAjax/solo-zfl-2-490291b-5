@@ -2,6 +2,7 @@ import Header from '@/components/layout/Header';
 import ListView from '@/components/list/ListView';
 import CompareView from '@/components/compare/CompareView';
 import StatsView from '@/components/stats/StatsView';
+import BenchView from '@/components/bench/BenchView';
 import FormModal from '@/components/form/FormModal';
 import DetailModal from '@/components/detail/DetailModal';
 import ImportExportModal from '@/components/importExport/ImportExportModal';
@@ -21,6 +22,8 @@ export default function Home() {
         return <CompareView />;
       case 'stats':
         return <StatsView />;
+      case 'bench':
+        return <BenchView />;
       case 'list':
       default:
         return <ListView />;

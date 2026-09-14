@@ -1,4 +1,4 @@
-import { Keyboard, Plus, GitCompare, List, BarChart3, HardDrive } from 'lucide-react';
+import { Keyboard, Plus, GitCompare, List, BarChart3, HardDrive, FlaskConical } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 
 export default function Header() {
@@ -75,6 +75,19 @@ export default function Header() {
             >
               <BarChart3 className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">统计</span>
+            </button>
+            <button
+              onClick={() => setViewMode('bench')}
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                viewMode === 'bench'
+                  ? 'bg-brass-300/20 text-brass-100 border border-brass-300/30'
+                  : 'text-ink-400 hover:text-ink-200'
+              }`}
+              title="改装方案决策台"
+              data-testid="nav-bench"
+            >
+              <FlaskConical className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">决策台</span>
             </button>
           </div>
 

@@ -93,7 +93,10 @@ export default function CompareView() {
       );
     }
     return (
-      <div className={classes.card}>
+      <div
+        className={classes.card}
+        data-testid={`compare-card-${side}`}
+      >
         <div className={classes.glow} />
         <div className="relative">
           <div className="flex items-start justify-between gap-3 mb-3">
